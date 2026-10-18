@@ -1,0 +1,611 @@
+--!strict
+-- LibreUI - biblioteca local de componentes visuais para Roblox.
+-- Use este arquivo como ModuleScript e faça require a partir de um LocalScript.
+-- A biblioteca cria apenas UI; não carrega código remoto nem altera o mundo do jogo.
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local Library = {}
+local Window = {}
+Window.__index = Window
+local Tab = {}
+Tab.__index = Tab
+
+local DEFAULTS = {
+    Title = "LIBRE UI",
+    Subtitle = "LOCAL UI COMPONENTS",
+    Name = "LibreUI",
+    Size = UDim2.fromOffset(620, 420),
+    Accent = Color3.fromRGB(40, 225, 151),
+    Background = Color3.fromRGB(9, 13, 19),
+    Surface = Color3.fromRGB(17, 22, 30),
+    Surface2 = Color3.fromRGB(25, 31, 41),
+    Text = Color3.fromRGB(238, 243, 247),
+    Muted = Color3.fromRGB(145, 155, 168),
+    Off = Color3.fromRGB(55, 63, 74),
+}
+
+local function copyTheme(options)
+    local theme = {}
+    for key, value in pairs(DEFAULTS) do
+        theme[key] = options[key] ~= nil and options[key] or value
+    end
+    return theme
+end
+
+local function addCorner(parent, radius)
+    local uiCorner = Instance.new("UICorner")
+    uiCorner.CornerRadius = UDim.new(0, radius)
+    uiCorner.Parent = parent
+    return uiCorner
+end
+
+local function addStroke(parent, color, thickness)
+    local uiStroke = Instance.new("UIStroke")
+    uiStroke.Color = color
+    uiStroke.Thickness = thickness or 1
+    uiStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    uiStroke.LineJoinMode = Enum.LineJoinMode.Round
+    uiStroke.Parent = parent
+    return uiStroke
+end
+
+local function makeText(parent, value, size, color, font)
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Text = value or ""
+    label.TextColor3 = color
+    label.TextSize = size or 10
+    label.Font = font or Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextYAlignment = Enum.TextYAlignment.Center
+    label.Parent = parent
+    return label
+end
+
+local function isPointerInput(input)
+    return input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch
+end
+
+local function invoke(callback, ...)
+    if type(callback) ~= "function" then
+        return
+    end
+    local ok, err = pcall(callback, ...)
+    if not ok then
+        warn("[LibreUI] Erro no callback: " .. tostring(err))
+    end
+end
+
+function Window:_connect(signal, callback)
+    local connection = signal:Connect(callback)
+    table.insert(self._connections, connection)
+    return connection
+end
+
+function Window:_selectTab(targetTab)
+    self._activeTab = targetTab
+    for _, tab in ipairs(self.Tabs) do
+        local selected = tab == targetTab
+        tab.Page.Visible = selected
+        tab.Button.BackgroundColor3 = selected and self.Theme.Surface2 or self.Theme.Surface
+        tab.Button.TextColor3 = selected and self.Theme.Text or self.Theme.Muted
+    end
+end
+
+function Window:CreateTab(name)
+    assert(not self._destroyed, "LibreUI: a janela já foi destruída")
+    assert(type(name) == "string" and name ~= "", "CreateTab precisa de um nome")
+
+    local page = Instance.new("ScrollingFrame")
+    page.Name = "Page_" .. tostring(#self.Tabs + 1)
+    page.Size = UDim2.fromScale(1, 1)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 3
+    page.ScrollBarImageColor3 = self.Theme.Accent
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.Visible = false
+    page.Parent = self.Content
+
+    local padding = Instance.new("UIPadding")
+    padding.PaddingTop = UDim.new(0, 2)
+    padding.PaddingBottom = UDim.new(0, 8)
+    padding.PaddingLeft = UDim.new(0, 3)
+    padding.PaddingRight = UDim.new(0, 8)
+    padding.Parent = page
+
+    local pageLayout = Instance.new("UIListLayout")
+    pageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    pageLayout.Padding = UDim.new(0, 7)
+    pageLayout.Parent = page
+
+    local button = Instance.new("TextButton")
+    button.Name = "TabButton_" .. tostring(#self.Tabs + 1)
+    button.Size = UDim2.new(1, -10, 0, 34)
+    button.BackgroundColor3 = self.Theme.Surface
+    button.BorderSizePixel = 0
+    button.Text = name
+    button.TextColor3 = self.Theme.Muted
+    button.TextSize = 10
+    button.Font = Enum.Font.GothamBold
+    button.TextXAlignment = Enum.TextXAlignment.Left
+    button.LayoutOrder = #self.Tabs + 1
+    button.Parent = self.Sidebar
+    addCorner(button, 7)
+
+    local buttonPadding = Instance.new("UIPadding")
+    buttonPadding.PaddingLeft = UDim.new(0, 12)
+    buttonPadding.Parent = button
+
+    local tab = setmetatable({
+        Name = name,
+        Window = self,
+        Page = page,
+        Button = button,
+        _controlOrder = 0,
+    }, Tab)
+    table.insert(self.Tabs, tab)
+
+    self:_connect(button.MouseButton1Click, function()
+        self:_selectTab(tab)
+    end)
+
+    if not self._activeTab then
+        self:_selectTab(tab)
+    end
+    return tab
+end
+
+function Tab:_makeRow(height)
+    assert(not self.Window._destroyed, "LibreUI: a janela já foi destruída")
+    self._controlOrder += 1
+
+    local row = Instance.new("Frame")
+    row.Name = "Control_" .. tostring(self._controlOrder)
+    row.Size = UDim2.new(1, 0, 0, height)
+    row.BackgroundColor3 = self.Window.Theme.Surface
+    row.BackgroundTransparency = 0.04
+    row.BorderSizePixel = 0
+    row.LayoutOrder = self._controlOrder
+    row.Parent = self.Page
+    addCorner(row, 8)
+    return row
+end
+
+function Tab:AddSection(title, description)
+    local row = self:_makeRow(description and 46 or 26)
+    row.BackgroundTransparency = 1
+    local heading = makeText(row, string.upper(title or ""), 9, self.Window.Theme.Accent, Enum.Font.GothamBold)
+    heading.Size = UDim2.new(1, 0, 0, 17)
+    if description then
+        local sub = makeText(row, description, 8, self.Window.Theme.Muted, Enum.Font.Gotham)
+        sub.Position = UDim2.new(0, 0, 0, 19)
+        sub.Size = UDim2.new(1, 0, 0, 17)
+    end
+    return row
+end
+
+function Tab:AddLabel(config)
+    config = type(config) == "table" and config or { Name = tostring(config or "") }
+    local row = self:_makeRow(config.Height or 34)
+    local label = makeText(row, config.Name or "", config.TextSize or 10, self.Window.Theme.Text, Enum.Font.GothamMedium)
+    label.Position = UDim2.new(0, 11, 0, 0)
+    label.Size = UDim2.new(1, -22, 1, 0)
+    return { Instance = row, Label = label }
+end
+
+function Tab:AddToggle(config)
+    config = config or {}
+    local theme = self.Window.Theme
+    local initial = config.Default == true
+    local row = self:_makeRow(42)
+
+    local label = makeText(row, config.Name or "Toggle", 10, theme.Text, Enum.Font.GothamMedium)
+    label.Position = UDim2.new(0, 11, 0, 0)
+    label.Size = UDim2.new(1, -68, 1, 0)
+
+    local track = Instance.new("TextButton")
+    track.Name = "ToggleTrack"
+    track.Size = UDim2.fromOffset(36, 20)
+    track.Position = UDim2.new(1, -47, 0.5, -10)
+    track.Text = ""
+    track.AutoButtonColor = false
+    track.BorderSizePixel = 0
+    track.Parent = row
+    addCorner(track, 12)
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.fromOffset(14, 14)
+    knob.Position = UDim2.new(0, 3, 0.5, -7)
+    knob.BackgroundColor3 = Color3.fromRGB(246, 248, 250)
+    knob.BorderSizePixel = 0
+    knob.Parent = track
+    addCorner(knob, 8)
+
+    local control = { Value = initial, Instance = row }
+    local function render()
+        track.BackgroundColor3 = control.Value and theme.Accent or theme.Off
+        knob.Position = control.Value and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
+    end
+    function control:SetValue(value, silent)
+        control.Value = value == true
+        render()
+        if not silent then invoke(config.Callback, control.Value) end
+    end
+    function control:GetValue()
+        return control.Value
+    end
+
+    render()
+    self.Window:_connect(track.MouseButton1Click, function()
+        control:SetValue(not control.Value)
+    end)
+    return control
+end
+
+function Tab:AddSlider(config)
+    config = config or {}
+    local theme = self.Window.Theme
+    local minimum = tonumber(config.Min) or 0
+    local maximum = tonumber(config.Max) or 100
+    if maximum <= minimum then
+        maximum = minimum + 1
+    end
+    local step = tonumber(config.Step) or 1
+    if step <= 0 then
+        step = 1
+    end
+    local suffix = config.Suffix or ""
+    local decimals = tonumber(config.Decimals)
+    if decimals == nil then
+        decimals = step < 1 and 2 or 0
+    end
+    decimals = math.clamp(math.floor(decimals), 0, 4)
+
+    local row = self:_makeRow(60)
+    local label = makeText(row, config.Name or "Slider", 10, theme.Text, Enum.Font.GothamMedium)
+    label.Position = UDim2.new(0, 11, 0, 4)
+    label.Size = UDim2.new(1, -90, 0, 17)
+
+    local valueLabel = makeText(row, "", 9, theme.Accent, Enum.Font.GothamBold)
+    valueLabel.Position = UDim2.new(1, -72, 0, 4)
+    valueLabel.Size = UDim2.fromOffset(60, 17)
+    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+
+    local track = Instance.new("TextButton")
+    track.Name = "SliderTrack"
+    track.Size = UDim2.new(1, -22, 0, 7)
+    track.Position = UDim2.new(0, 11, 0, 39)
+    track.BackgroundColor3 = theme.Off
+    track.Text = ""
+    track.AutoButtonColor = false
+    track.BorderSizePixel = 0
+    track.Parent = row
+    addCorner(track, 5)
+
+    local fill = Instance.new("Frame")
+    fill.Name = "SliderFill"
+    fill.Size = UDim2.new(0, 0, 1, 0)
+    fill.BackgroundColor3 = theme.Accent
+    fill.BorderSizePixel = 0
+    fill.Parent = track
+    addCorner(fill, 5)
+
+    local initial = tonumber(config.Default) or minimum
+    local control = { Value = math.clamp(initial, minimum, maximum), Instance = row }
+    local function formatValue(value)
+        if decimals == 0 then
+            return tostring(math.floor(value + 0.5))
+        end
+        return string.format("%." .. tostring(decimals) .. "f", value)
+    end
+    local function render()
+        local fraction = (control.Value - minimum) / (maximum - minimum)
+        fill.Size = UDim2.new(math.clamp(fraction, 0, 1), 0, 1, 0)
+        valueLabel.Text = formatValue(control.Value) .. tostring(suffix)
+    end
+    local function quantize(value)
+        local stepped = minimum + math.floor((value - minimum) / step + 0.5) * step
+        return math.clamp(stepped, minimum, maximum)
+    end
+    function control:SetValue(value, silent)
+        local number = tonumber(value)
+        if number == nil then return end
+        local nextValue = quantize(number)
+        local changed = nextValue ~= control.Value
+        control.Value = nextValue
+        render()
+        if changed and not silent then invoke(config.Callback, control.Value) end
+    end
+    function control:GetValue()
+        return control.Value
+    end
+    local function updateFromX(x)
+        local width = math.max(track.AbsoluteSize.X, 1)
+        local fraction = math.clamp((x - track.AbsolutePosition.X) / width, 0, 1)
+        control:SetValue(minimum + fraction * (maximum - minimum))
+    end
+
+    render()
+    local dragging = false
+    self.Window:_connect(track.InputBegan, function(input)
+        if isPointerInput(input) then
+            dragging = true
+            updateFromX(input.Position.X)
+        end
+    end)
+    self.Window:_connect(UserInputService.InputChanged, function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            updateFromX(input.Position.X)
+        end
+    end)
+    self.Window:_connect(UserInputService.InputEnded, function(input)
+        if isPointerInput(input) then
+            dragging = false
+        end
+    end)
+    return control
+end
+
+function Tab:AddDropdown(config)
+    config = config or {}
+    local options = config.Options or {}
+    assert(type(options) == "table" and #options > 0, "AddDropdown precisa de Options com pelo menos um valor")
+    local theme = self.Window.Theme
+    local current = config.Default
+    local currentIndex = table.find(options, current) or 1
+    current = options[currentIndex]
+
+    local row = self:_makeRow(42)
+    local label = makeText(row, config.Name or "Opção", 10, theme.Text, Enum.Font.GothamMedium)
+    label.Position = UDim2.new(0, 11, 0, 0)
+    label.Size = UDim2.new(0.45, -8, 1, 0)
+
+    local choose = Instance.new("TextButton")
+    choose.Name = "DropdownChoice"
+    choose.Size = UDim2.new(0.55, -10, 0, 27)
+    choose.Position = UDim2.new(0.45, 0, 0.5, -13)
+    choose.BackgroundColor3 = theme.Surface2
+    choose.TextColor3 = theme.Text
+    choose.TextSize = 9
+    choose.Font = Enum.Font.GothamMedium
+    choose.Parent = row
+    addCorner(choose, 6)
+
+    local control = { Value = current, Instance = row }
+    local function render()
+        choose.Text = tostring(control.Value) .. "   v"
+    end
+    function control:SetValue(value, silent)
+        local index = table.find(options, value)
+        if not index then return end
+        local changed = control.Value ~= value
+        currentIndex = index
+        control.Value = value
+        render()
+        if changed and not silent then invoke(config.Callback, control.Value) end
+    end
+    function control:GetValue()
+        return control.Value
+    end
+    render()
+
+    self.Window:_connect(choose.MouseButton1Click, function()
+        currentIndex = currentIndex % #options + 1
+        control:SetValue(options[currentIndex])
+    end)
+    return control
+end
+
+function Tab:AddButton(config)
+    if type(config) == "string" then
+        config = { Name = config }
+    end
+    config = config or {}
+    local row = self:_makeRow(42)
+
+    local button = Instance.new("TextButton")
+    button.Name = "ActionButton"
+    button.Size = UDim2.new(1, -18, 0, 28)
+    button.Position = UDim2.new(0, 9, 0.5, -14)
+    button.BackgroundColor3 = self.Window.Theme.Accent
+    button.Text = config.Name or "Executar"
+    button.TextColor3 = Color3.fromRGB(5, 18, 18)
+    button.TextSize = 9
+    button.Font = Enum.Font.GothamBold
+    button.Parent = row
+    addCorner(button, 7)
+
+    self.Window:_connect(button.MouseButton1Click, function()
+        invoke(config.Callback)
+    end)
+    return { Instance = row, Button = button }
+end
+
+function Window:Notify(message, duration)
+    if self._destroyed then return end
+    local theme = self.Theme
+    local toast = Instance.new("Frame")
+    toast.Name = "LibreUINotification"
+    toast.AnchorPoint = Vector2.new(1, 0)
+    toast.Position = UDim2.new(1, -18, 0, 18)
+    toast.Size = UDim2.fromOffset(250, 48)
+    toast.BackgroundColor3 = theme.Surface
+    toast.BorderSizePixel = 0
+    toast.ZIndex = 30
+    toast.Parent = self.Gui
+    addCorner(toast, 9)
+    addStroke(toast, theme.Accent, 1)
+
+    local label = makeText(toast, tostring(message), 10, theme.Text, Enum.Font.GothamMedium)
+    label.Position = UDim2.new(0, 12, 0, 0)
+    label.Size = UDim2.new(1, -24, 1, 0)
+    label.TextWrapped = true
+    label.ZIndex = 31
+
+    task.delay(math.max(tonumber(duration) or 2.5, 0.5), function()
+        if toast.Parent then toast:Destroy() end
+    end)
+end
+
+function Window:Open()
+    if not self._destroyed then self.Frame.Visible = true end
+end
+
+function Window:Close()
+    if not self._destroyed then self.Frame.Visible = false end
+end
+
+function Window:Toggle()
+    if not self._destroyed then self.Frame.Visible = not self.Frame.Visible end
+end
+
+function Window:Destroy()
+    if self._destroyed then return end
+    self._destroyed = true
+    for _, connection in ipairs(self._connections) do
+        if connection.Connected then connection:Disconnect() end
+    end
+    table.clear(self._connections)
+    if self.Gui then self.Gui:Destroy() end
+end
+
+function Library:CreateWindow(options)
+    options = options or {}
+    local player = Players.LocalPlayer
+    assert(player, "LibreUI: CreateWindow deve ser chamada por um LocalScript")
+    local playerGui = player:WaitForChild("PlayerGui")
+    local theme = copyTheme(options)
+
+    local window = setmetatable({
+        Theme = theme,
+        Tabs = {},
+        _connections = {},
+        _activeTab = nil,
+        _destroyed = false,
+    }, Window)
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = options.Name or DEFAULTS.Name
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = tonumber(options.DisplayOrder) or 30
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.Parent = playerGui
+    window.Gui = gui
+
+    local frame = Instance.new("Frame")
+    frame.Name = "LibreUIWindow"
+    frame.AnchorPoint = Vector2.new(0.5, 0.5)
+    frame.Position = options.Position or UDim2.fromScale(0.5, 0.5)
+    frame.Size = options.Size or DEFAULTS.Size
+    frame.BackgroundColor3 = theme.Background
+    frame.BorderSizePixel = 0
+    frame.ClipsDescendants = true
+    frame.Parent = gui
+    addCorner(frame, 14)
+    local frameStroke = addStroke(frame, theme.Accent, 2)
+    frameStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    window.Frame = frame
+
+    local header = Instance.new("Frame")
+    header.Name = "Header"
+    header.Size = UDim2.new(1, 0, 0, 58)
+    header.BackgroundTransparency = 1
+    header.Active = true
+    header.Parent = frame
+
+    local logo = Instance.new("Frame")
+    logo.Name = "AccentMark"
+    logo.Size = UDim2.fromOffset(4, 26)
+    logo.Position = UDim2.new(0, 15, 0.5, -13)
+    logo.BackgroundColor3 = theme.Accent
+    logo.BorderSizePixel = 0
+    logo.Parent = header
+    addCorner(logo, 3)
+
+    local title = makeText(header, options.Title or DEFAULTS.Title, 14, theme.Text, Enum.Font.GothamBlack)
+    title.Position = UDim2.new(0, 28, 0, 8)
+    title.Size = UDim2.new(0, 230, 0, 22)
+
+    local subtitle = makeText(header, options.Subtitle or DEFAULTS.Subtitle, 8, theme.Muted, Enum.Font.GothamBold)
+    subtitle.Position = UDim2.new(0, 29, 0, 31)
+    subtitle.Size = UDim2.new(0, 260, 0, 14)
+
+    local closeButton = Instance.new("TextButton")
+    closeButton.Name = "CloseButton"
+    closeButton.Size = UDim2.fromOffset(30, 30)
+    closeButton.Position = UDim2.new(1, -43, 0, 14)
+    closeButton.BackgroundColor3 = theme.Surface2
+    closeButton.Text = "X"
+    closeButton.TextColor3 = theme.Muted
+    closeButton.TextSize = 15
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.Parent = header
+    addCorner(closeButton, 8)
+    window:_connect(closeButton.MouseButton1Click, function()
+        window:Close()
+    end)
+
+    local divider = Instance.new("Frame")
+    divider.Name = "HeaderDivider"
+    divider.Size = UDim2.new(1, -20, 0, 1)
+    divider.Position = UDim2.new(0, 10, 0, 58)
+    divider.BackgroundColor3 = theme.Surface2
+    divider.BorderSizePixel = 0
+    divider.Parent = frame
+
+    local sidebar = Instance.new("Frame")
+    sidebar.Name = "Sidebar"
+    sidebar.Position = UDim2.new(0, 12, 0, 70)
+    sidebar.Size = UDim2.new(0, 145, 1, -82)
+    sidebar.BackgroundTransparency = 1
+    sidebar.Parent = frame
+    window.Sidebar = sidebar
+
+    local sidebarLayout = Instance.new("UIListLayout")
+    sidebarLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    sidebarLayout.Padding = UDim.new(0, 5)
+    sidebarLayout.Parent = sidebar
+
+    local content = Instance.new("Frame")
+    content.Name = "Content"
+    content.Position = UDim2.new(0, 166, 0, 70)
+    content.Size = UDim2.new(1, -178, 1, -82)
+    content.BackgroundTransparency = 1
+    content.ClipsDescendants = true
+    content.Parent = frame
+    window.Content = content
+
+    local dragging = false
+    local dragStart
+    local startPosition
+    window:_connect(header.InputBegan, function(input)
+        local beforeClose = header.AbsolutePosition.X + header.AbsoluteSize.X - 52
+        if isPointerInput(input) and input.Position.X <= beforeClose then
+            dragging = true
+            dragStart = input.Position
+            startPosition = frame.Position
+        end
+    end)
+    window:_connect(UserInputService.InputChanged, function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPosition.X.Scale, startPosition.X.Offset + delta.X,
+                startPosition.Y.Scale, startPosition.Y.Offset + delta.Y
+            )
+        end
+    end)
+    window:_connect(UserInputService.InputEnded, function(input)
+        if isPointerInput(input) then dragging = false end
+    end)
+
+    return window
+end
+
+return Library
