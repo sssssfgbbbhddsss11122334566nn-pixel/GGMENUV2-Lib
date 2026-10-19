@@ -1741,7 +1741,11 @@ function Tab:Add3DPreview(config)
         return nil
     end
     local function itemName(item, index)
-        return tostring(itemField(item, "Name") or ("Item " .. tostring(index)))
+        local configuredName = itemField(item, "Name")
+        if configuredName ~= nil and tostring(configuredName) ~= "" then return tostring(configuredName) end
+        local source = itemField(item, "Model") or itemField(item, "Character") or itemField(item, "Object") or itemField(item, "Instance") or itemField(item, "Player")
+        if source and itemField(source, "Name") then return tostring(itemField(source, "Name")) end
+        return "Item " .. tostring(index)
     end
     local function playerForItem(item)
         if typeof(item) == "Instance" and item:IsA("Player") then return item end
@@ -1758,6 +1762,22 @@ function Tab:Add3DPreview(config)
         local playerOrModel = itemField(item, "Player")
         if typeof(playerOrModel) == "Instance" then return playerOrModel end
         return itemField(item, "Model") or itemField(item, "Character") or itemField(item, "Object") or itemField(item, "Instance")
+    end
+    local function itemSearchText(item, index)
+        local names = { itemName(item, index) }
+        local source = modelSource(item)
+        if source then table.insert(names, tostring(source.Name)) end
+        local player = playerForItem(item)
+        if player then
+            table.insert(names, tostring(player.Name))
+            table.insert(names, tostring(player.DisplayName))
+        end
+        return string.lower(table.concat(names, " "))
+    end
+    local indexedSources = {}
+    for _, item in ipairs(items) do
+        local source = modelSource(item)
+        if source then indexedSources[source] = true end
     end
 
     local minimumCardHeight = showListSelector and 250 or 224
@@ -2115,8 +2135,7 @@ function Tab:Add3DPreview(config)
     end
 
     local watchedPlayers = {}
-    for _, item in ipairs(items) do
-        local player = playerForItem(item)
+    local function watchPlayer(player)
         if player and not watchedPlayers[player] then
             watchedPlayers[player] = true
             window:_connect(player.CharacterAdded, function()
@@ -2124,11 +2143,42 @@ function Tab:Add3DPreview(config)
             end)
         end
     end
+    for _, item in ipairs(items) do watchPlayer(playerForItem(item)) end
 
     local mainOptionButtons = {}
     local modalOptionButtons = {}
+    local mainAddOption
+    local modalAddOption
+    local searchEnabled = config.Searchable ~= false
+    local searchBoxes = {}
+    local searchMenus = {}
+    local searchQuery = ""
+    local runObjectSearch
+    local function applyObjectSearch(query, sourceBox)
+        searchQuery = string.lower(string.gsub(tostring(query or ""), "^%s*(.-)%s*$", "%1"))
+        for _, searchBox in ipairs(searchBoxes) do
+            if searchBox ~= sourceBox and searchBox.Text ~= tostring(query or "") then
+                searchBox.Text = tostring(query or "")
+            end
+        end
+        local visibleCount = 0
+        for listIndex, buttonList in ipairs({ mainOptionButtons, modalOptionButtons }) do
+            for index, optionButton in ipairs(buttonList) do
+                local matches = searchQuery == "" or string.find(itemSearchText(items[index], index), searchQuery, 1, true) ~= nil
+                optionButton.Visible = matches
+                if matches and listIndex == 1 then visibleCount = visibleCount + 1 end
+            end
+        end
+        for _, menuInfo in ipairs(searchMenus) do
+            if menuInfo.Empty then menuInfo.Empty.Visible = visibleCount == 0 end
+            local visibleRows = math.min(visibleCount, menuInfo.MaxVisible)
+            local searchHeight = menuInfo.SearchBox and 31 or 0
+            menuInfo.Menu.Size = UDim2.new(menuInfo.Menu.Size.X.Scale, menuInfo.Menu.Size.X.Offset, 0, searchHeight + math.max(1, visibleRows) * 29 + 6)
+            menuInfo.Menu.CanvasPosition = Vector2.new(0, 0)
+        end
+    end
     if showListSelector then
-        local function createOptionMenu(parent, name, position, size, zIndex, buttonList)
+        local function createOptionMenu(parent, name, position, size, zIndex, buttonList, maxVisible)
             local menu = Instance.new("ScrollingFrame")
             menu.Name = name
             menu.Position = position
@@ -2158,7 +2208,33 @@ function Tab:Add3DPreview(config)
             padding.PaddingRight = UDim.new(0, 6)
             padding.Parent = menu
 
-            for index, item in ipairs(items) do
+            local searchBox
+            if searchEnabled then
+                searchBox = Instance.new("TextBox")
+                searchBox.Name = "ObjectSearch"
+                searchBox.Size = UDim2.new(1, -3, 0, 27)
+                searchBox.BackgroundColor3 = window.Theme.Surface
+                searchBox.BorderSizePixel = 0
+                searchBox.ClearTextOnFocus = false
+                searchBox.PlaceholderText = config.SearchPlaceholder or "Buscar objeto pelo nome..."
+                searchBox.PlaceholderColor3 = window.Theme.Muted
+                searchBox.Text = ""
+                searchBox.TextColor3 = window.Theme.Text
+                searchBox.TextSize = 9
+                searchBox.Font = Enum.Font.GothamMedium
+                searchBox.TextXAlignment = Enum.TextXAlignment.Left
+                searchBox.LayoutOrder = 0
+                searchBox.ZIndex = zIndex + 1
+                searchBox.Parent = menu
+                addCorner(searchBox, 5)
+                local searchPadding = Instance.new("UIPadding")
+                searchPadding.PaddingLeft = UDim.new(0, 8)
+                searchPadding.PaddingRight = UDim.new(0, 8)
+                searchPadding.Parent = searchBox
+                table.insert(searchBoxes, searchBox)
+            end
+
+            local function addOptionButton(index, item)
                 local optionButton = Instance.new("TextButton")
                 optionButton.Name = "ObjectOption_" .. tostring(index)
                 optionButton.Size = UDim2.new(1, -3, 0, 25)
@@ -2169,7 +2245,7 @@ function Tab:Add3DPreview(config)
                 optionButton.TextSize = 9
                 optionButton.Font = Enum.Font.GothamMedium
                 optionButton.TextXAlignment = Enum.TextXAlignment.Left
-                optionButton.LayoutOrder = index
+                optionButton.LayoutOrder = index + (searchBox and 1 or 0)
                 optionButton.ZIndex = zIndex + 1
                 optionButton.Parent = menu
                 addCorner(optionButton, 5)
@@ -2183,26 +2259,148 @@ function Tab:Add3DPreview(config)
                     modalMenu.Visible = false
                     if renderSelector then renderSelector() end
                 end)
+                return optionButton
             end
-            return menu
+            for index, item in ipairs(items) do addOptionButton(index, item) end
+            local emptyLabel
+            if searchEnabled then
+                emptyLabel = Instance.new("TextLabel")
+                emptyLabel.Name = "NoObjectSearchResults"
+                emptyLabel.Size = UDim2.new(1, -3, 0, 28)
+                emptyLabel.BackgroundTransparency = 1
+                emptyLabel.Text = config.NoResultsText or "Nenhum objeto encontrado"
+                emptyLabel.TextColor3 = window.Theme.Muted
+                emptyLabel.TextSize = 8
+                emptyLabel.Font = Enum.Font.GothamMedium
+                emptyLabel.TextXAlignment = Enum.TextXAlignment.Center
+                emptyLabel.LayoutOrder = #items + 2
+                emptyLabel.Visible = false
+                emptyLabel.ZIndex = zIndex + 1
+                emptyLabel.Parent = menu
+            end
+            table.insert(searchMenus, {
+                Menu = menu,
+                SearchBox = searchBox,
+                Empty = emptyLabel,
+                MaxVisible = maxVisible,
+            })
+            return menu, addOptionButton
         end
 
-        mainMenu = createOptionMenu(
+        mainMenu, mainAddOption = createOptionMenu(
             card,
             "ObjectSelectorList",
             UDim2.new(0, 10, 0, 49),
-            UDim2.new(1, -20, 0, math.min(#items, 5) * 29 + 6),
+            UDim2.new(1, -20, 0, (searchEnabled and 31 or 0) + math.min(#items, 5) * 29 + 6),
             10,
-            mainOptionButtons
+            mainOptionButtons,
+            5
         )
-        modalMenu = createOptionMenu(
+        modalMenu, modalAddOption = createOptionMenu(
             modal,
             "ModalObjectSelectorList",
             UDim2.new(0, 14, 0, 73),
-            UDim2.new(1, -28, 0, math.min(#items, 6) * 29 + 6),
+            UDim2.new(1, -28, 0, (searchEnabled and 31 or 0) + math.min(#items, 6) * 29 + 6),
             45,
-            modalOptionButtons
+            modalOptionButtons,
+            6
         )
+        for _, searchBox in ipairs(searchBoxes) do
+            window:_connect(searchBox:GetPropertyChangedSignal("Text"), function()
+                runObjectSearch(searchBox.Text, searchBox)
+            end)
+        end
+        applyObjectSearch("", nil)
+
+        local searchRevision = 0
+        local function isVisualInstance(instance)
+            if typeof(instance) ~= "Instance" then return false end
+            if instance:IsA("BasePart") then return true end
+            if instance:IsA("Model") or instance:IsA("Folder") or instance:IsA("Tool") or instance:IsA("Accessory") then
+                local ok, descendants = pcall(function() return instance:GetDescendants() end)
+                if ok then
+                    for _, descendant in ipairs(descendants) do
+                        if descendant:IsA("BasePart") then return true end
+                    end
+                end
+            end
+            return false
+        end
+        local function findClientVisibleObjects(query)
+            local limit = math.clamp(math.floor(tonumber(config.MaxSearchResults) or 60), 1, 200)
+            local buckets = { {}, {}, {} }
+            local seen = {}
+            local function consider(source, label, item)
+                if not source or indexedSources[source] or seen[source] then return end
+                local lowerName = string.lower(tostring(label or source.Name))
+                if not string.find(lowerName, query, 1, true) then return end
+                if not isVisualInstance(source) then return end
+                seen[source] = true
+                local rank = lowerName == query and 1 or (string.sub(lowerName, 1, #query) == query and 2 or 3)
+                if #buckets[rank] < limit then
+                    table.insert(buckets[rank], { Source = source, Item = item, Name = lowerName })
+                end
+            end
+
+            if config.SearchPlayers ~= false then
+                for _, player in ipairs(Players:GetPlayers()) do
+                    local character = player.Character
+                    local label = tostring(player.DisplayName) .. " (@" .. tostring(player.Name) .. ")"
+                    if character then consider(character, label, { Name = label, Player = player }) end
+                end
+            end
+
+            local roots = config.SearchRoots
+            if type(roots) ~= "table" or #roots == 0 then roots = { game } end
+            for _, root in ipairs(roots) do
+                if typeof(root) == "Instance" then
+                    if root ~= game then consider(root, root.Name, { Name = root.Name, Model = root }) end
+                    local ok, descendants = pcall(function() return root:GetDescendants() end)
+                    if ok then
+                        for _, descendant in ipairs(descendants) do
+                            consider(descendant, descendant.Name, { Name = descendant.Name, Model = descendant })
+                        end
+                    end
+                end
+            end
+
+            local matches = {}
+            for _, bucket in ipairs(buckets) do
+                table.sort(bucket, function(a, b) return a.Name < b.Name end)
+                for _, entry in ipairs(bucket) do
+                    if #matches >= limit then return matches end
+                    table.insert(matches, entry)
+                end
+            end
+            return matches
+        end
+        runObjectSearch = function(query, sourceBox)
+            searchRevision = searchRevision + 1
+            local request = searchRevision
+            applyObjectSearch(query, sourceBox)
+            local normalized = searchQuery
+            if normalized == "" then return end
+            task.delay(0.25, function()
+                if request ~= searchRevision or window._destroyed then return end
+                local matches = findClientVisibleObjects(normalized)
+                local added = false
+                for _, entry in ipairs(matches) do
+                    if not indexedSources[entry.Source] then
+                        table.insert(items, entry.Item)
+                        indexedSources[entry.Source] = true
+                        local index = #items
+                        mainAddOption(index, entry.Item)
+                        modalAddOption(index, entry.Item)
+                        watchPlayer(playerForItem(entry.Item))
+                        added = true
+                    end
+                end
+                if added and request == searchRevision then
+                    applyObjectSearch(query, sourceBox)
+                    if renderSelector then renderSelector() end
+                end
+            end)
+        end
         table.insert(window._overlays, mainMenu)
         table.insert(window._overlays, modalMenu)
 
@@ -2246,6 +2444,14 @@ function Tab:Add3DPreview(config)
             modalMenu.BackgroundColor3 = surface
             mainMenu.ScrollBarImageColor3 = accent
             modalMenu.ScrollBarImageColor3 = accent
+            for _, searchBox in ipairs(searchBoxes) do
+                searchBox.BackgroundColor3 = surface
+                searchBox.TextColor3 = textColor
+                searchBox.PlaceholderColor3 = window.Theme.Muted
+            end
+            for _, menuInfo in ipairs(searchMenus) do
+                if menuInfo.Empty then menuInfo.Empty.TextColor3 = window.Theme.Muted end
+            end
 
             local paletteChanged = surface ~= lastSurface or textColor ~= lastText
             if paletteChanged then
